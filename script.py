@@ -1,4 +1,5 @@
 import asyncio
+
 # 🛠 Патч для сумісності з новішими версіями Python (3.12+)
 try:
     asyncio.get_event_loop()
@@ -32,21 +33,23 @@ app = Client(
 
 user_links = {}
 
+
 # --- ВЕБ-СЕРВЕР ДЛЯ BINDING ПОРТУ НА RENDER ---
 async def handle_ping(request):
     return web.Response(text="Bot is alive!")
+
 
 async def start_web_server():
     server = web.Application()
     server.router.add_get("/", handle_ping)
     runner = web.AppRunner(server)
     await runner.setup()
-    
-    # Render передає свій порт у змінну PORT (за замовчуванням 10000)
+
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logging.info(f"Веб-сервер успішно піднято на порту {port}")
+
 
 def download_video_sync(url: str, output_path: str, quality_format: str) -> str:
     ydl_opts = {
@@ -60,12 +63,14 @@ def download_video_sync(url: str, output_path: str, quality_format: str) -> str:
         ydl.download([url])
     return output_path
 
+
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     await message.reply_text(
         "Привіт! 📥 Я бот для завантаження відео з **YouTube, TikTok та Instagram**.\n\n"
         "Надішли мені посилання на відео, щоб розпочати."
     )
+
 
 @app.on_message(filters.regex(r'https?://[^\s]+'))
 async def handle_url_message(client: Client, message: Message):
@@ -83,6 +88,7 @@ async def handle_url_message(client: Client, message: Message):
         ]
     ])
     await message.reply_text("Обери бажану якість завантаження:", reply_markup=keyboard)
+
 
 @app.on_callback_query(filters.regex(r"^q_"))
 async def process_quality_selection(client: Client, callback: CallbackQuery):
@@ -115,7 +121,11 @@ async def process_quality_selection(client: Client, callback: CallbackQuery):
         quality_label = "MP3 Аудіо"
         ext = "mp3"
 
-    status_msg = await callback.message.edit_text(f"⏳ Завантажую ({quality_label})... Зачекай трохи.")
+    try:
+        status_msg = await callback.message.edit_text(f"⏳ Завантажую ({quality_label})... Зачекай трохи.")
+    except MessageNotModified:
+        status_msg = callback.message
+
     file_path = f"download_{user_id}_{callback.message.id}.{ext}"
 
     try:
@@ -142,7 +152,10 @@ async def process_quality_selection(client: Client, callback: CallbackQuery):
                 )
             await status_msg.delete()
         else:
-            await status_msg.edit_text("❌ Не вдалося зберегти файл.")
+            try:
+                await status_msg.edit_text("❌ Не вдалося зберегти файл.")
+            except MessageNotModified:
+                pass
 
     except Exception as e:
         logging.error(f"Помилка: {e}")
@@ -155,11 +168,13 @@ async def process_quality_selection(client: Client, callback: CallbackQuery):
         if os.path.exists(file_path):
             os.remove(file_path)
 
+
 async def main():
     await start_web_server()
     await app.start()
     logging.info("Бот успішно запущений!")
     await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
