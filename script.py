@@ -1,6 +1,6 @@
 import asyncio
 
-# 🛠 ПАТЧ ДЛЯ PYTHON 3.14+ (Має бути ДО імпорту pyrogram!)
+# 🛠 ПАТЧ ДЛЯ СУМІСНОСТІ З PYTHON 3.14+ (Має бути СТРOГО ДО імпорту pyrogram!)
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -14,7 +14,7 @@ from pyrogram.errors import MessageNotModified, RPCError
 from aiohttp import web
 
 # =============================================================
-# 🔑 ВАШІ ОФІЦІЙНІ ДАНІ
+# 🔑 ОСНОВНІ НАЛАШТУВАННЯ
 # =============================================================
 API_ID = 27422206
 API_HASH = "37295c82175268557acfd8f8f0c5a7e4"
@@ -26,8 +26,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+# Використовуємо чисто нову назву сесії для хмари, щоб уникнути конфліктів із ПК
 app = Client(
-    "downloader_render_v2",
+    "downloader_cloud_v1",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
@@ -122,19 +123,15 @@ async def process_quality(client: Client, callback: CallbackQuery):
     if quality_code == "max":
         fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
         label = "Максимальна"
-        ext = "mp4"
     elif quality_code == "720":
         fmt = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
         label = "720p"
-        ext = "mp4"
     elif quality_code == "480":
         fmt = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
         label = "480p"
-        ext = "mp4"
     else:
         fmt = "bestaudio/best"
         label = "MP3"
-        ext = "mp3"
 
     try:
         status_msg = await callback.message.edit_text(f"⏳ Завантажую ({label})... Зачекай.")
@@ -184,7 +181,7 @@ async def process_quality(client: Client, callback: CallbackQuery):
                 os.remove(downloaded_file)
         else:
             try:
-                await status_msg.edit_text("❌ Помилка завантаження.")
+                await status_msg.edit_text("❌ Помилка завантаження. Спробуйте інше посилання.")
             except MessageNotModified:
                 pass
 
