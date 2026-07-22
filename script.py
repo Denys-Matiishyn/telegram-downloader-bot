@@ -1,17 +1,9 @@
 import asyncio
-
-# 🛠 Патч для сумісності з новішими версіями Python (3.12+)
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
 import os
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pyrogram.errors import MessageNotModified
-from yt_dlp import YoutubeDL
+from pyrogram.errors import MessageNotModified, RPCError
 from aiohttp import web
 
 # =============================================================
@@ -22,10 +14,14 @@ API_HASH = "37295c82175268557acfd8f8f0c5a7e4"
 BOT_TOKEN = "8760890214:AAGs0vvMOcPtvASd99RANhOdJm_eutXUWKU"
 # =============================================================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
+# Використовуємо нове ім'я сесії v2, щоб уникнути конфліктів авторизації
 app = Client(
-    "unlimited_downloader_bot",
+    "downloader_render_v2",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
@@ -36,7 +32,7 @@ user_links = {}
 
 # --- ВЕБ-СЕРВЕР ДЛЯ BINDING ПОРТУ НА RENDER ---
 async def handle_ping(request):
-    return web.Response(text="Bot is alive!")
+    return web.Response(text="Bot is online and running!")
 
 
 async def start_web_server():
@@ -48,56 +44,69 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Веб-сервер успішно піднято на порту {port}")
+    logging.info(f"🌐 Веб-сервер піднято на порту {port}")
 
 
-def download_video_sync(url: str, output_path: str, quality_format: str) -> str:
-    ydl_opts = {
-        'format': quality_format,
-        'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }
-    with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    return output_path
+# --- АСИНХРОННЕ ЗАВАНТАЖЕННЯ ЧЕРЕЗ CLI YT-DLP ---
+async def download_media(url: str, output_template: str, fmt: str) -> bool:
+    cmd = [
+        "yt-dlp",
+        "-f", fmt,
+        "-o", output_template,
+        "--no-warnings",
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        url
+    ]
 
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+
+    if process.returncode != 0:
+        logging.error(f"Помилка yt-dlp: {stderr.decode()}")
+        return False
+    return True
+
+
+# --- ОБРОБНИКИ КОМАНД TELEGRAM ---
 
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     await message.reply_text(
-        "Привіт! 📥 Я бот для завантаження відео з **YouTube, TikTok та Instagram**.\n\n"
-        "Надішли мені посилання на відео, щоб розпочати."
+        "Привіт! 📥 Я готовий завантажувати відео з **YouTube, TikTok, Instagram**.\n\n"
+        "Надішли мені посилання на відео!"
     )
 
 
 @app.on_message(filters.regex(r'https?://[^\s]+'))
-async def handle_url_message(client: Client, message: Message):
+async def handle_url(client: Client, message: Message):
     url = message.text.strip()
     user_links[message.from_user.id] = url
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🎬 Максимальна (1080p / 4K)", callback_data="q_max"),
+            InlineKeyboardButton("🎬 Максимальна (1080p/4K)", callback_data="q_max"),
             InlineKeyboardButton("🎬 HD (720p)", callback_data="q_720")
         ],
         [
             InlineKeyboardButton("📱 SD (480p)", callback_data="q_480"),
-            InlineKeyboardButton("🎵 Тільки Аудіо (MP3)", callback_data="q_mp3")
+            InlineKeyboardButton("🎵 Тільки MP3", callback_data="q_mp3")
         ]
     ])
-    await message.reply_text("Обери бажану якість завантаження:", reply_markup=keyboard)
+    await message.reply_text("Обери якість для завантаження:", reply_markup=keyboard)
 
 
 @app.on_callback_query(filters.regex(r"^q_"))
-async def process_quality_selection(client: Client, callback: CallbackQuery):
+async def process_quality(client: Client, callback: CallbackQuery):
     user_id = callback.from_user.id
     url = user_links.get(user_id)
 
     if not url:
         try:
-            await callback.message.edit_text("❌ Помилка: Посилання застаріло. Надішли його ще раз.")
+            await callback.message.edit_text("❌ Посилання застаріло. Надішли його ще раз.")
         except MessageNotModified:
             pass
         return
@@ -106,73 +115,93 @@ async def process_quality_selection(client: Client, callback: CallbackQuery):
 
     if quality_code == "max":
         fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-        quality_label = "Максимальна"
+        label = "Максимальна"
         ext = "mp4"
     elif quality_code == "720":
         fmt = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
-        quality_label = "720p"
+        label = "720p"
         ext = "mp4"
     elif quality_code == "480":
         fmt = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best"
-        quality_label = "480p"
+        label = "480p"
         ext = "mp4"
     else:
         fmt = "bestaudio/best"
-        quality_label = "MP3 Аудіо"
+        label = "MP3"
         ext = "mp3"
 
     try:
-        status_msg = await callback.message.edit_text(f"⏳ Завантажую ({quality_label})... Зачекай трохи.")
+        status_msg = await callback.message.edit_text(f"⏳ Завантажую ({label})... Зачекай.")
     except MessageNotModified:
         status_msg = callback.message
 
-    file_path = f"download_{user_id}_{callback.message.id}.{ext}"
+    filename_base = f"file_{user_id}_{callback.message.id}"
+    output_template = f"{filename_base}.%(ext)s"
 
     try:
-        await asyncio.to_thread(download_video_sync, url, file_path, fmt)
+        success = await download_media(url, output_template, fmt)
 
-        if os.path.exists(file_path):
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        # Шукаємо завантажений файл
+        downloaded_file = None
+        for f in os.listdir("."):
+            if f.startswith(filename_base):
+                downloaded_file = f
+                break
+
+        if success and downloaded_file and os.path.exists(downloaded_file):
+            size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+
+            if size_mb > 2000:  # Ліміт Telegram 2 ГБ
+                await status_msg.edit_text("❌ Файл занадто великий для відправки в Telegram (> 2GB).")
+                os.remove(downloaded_file)
+                return
+
             try:
-                await status_msg.edit_text(f"📤 Відправляю у Telegram ({file_size_mb:.1f} МБ)...")
+                await status_msg.edit_text(f"📤 Відправляю у чат ({size_mb:.1f} МБ)...")
             except MessageNotModified:
                 pass
 
-            if ext == "mp3":
+            if downloaded_file.endswith(".mp3") or quality_code == "mp3":
                 await client.send_audio(
                     chat_id=callback.message.chat.id,
-                    audio=file_path,
-                    caption=f"✅ Завантажено у якості: {quality_label}"
+                    audio=downloaded_file,
+                    caption=f"✅ Завантажено у якості: {label}"
                 )
             else:
                 await client.send_video(
                     chat_id=callback.message.chat.id,
-                    video=file_path,
-                    caption=f"✅ Завантажено у якості: {quality_label}"
+                    video=downloaded_file,
+                    caption=f"✅ Завантажено у якості: {label}"
                 )
+
             await status_msg.delete()
+            if os.path.exists(downloaded_file):
+                os.remove(downloaded_file)
         else:
             try:
-                await status_msg.edit_text("❌ Не вдалося зберегти файл.")
+                await status_msg.edit_text("❌ Помилка завантаження. Перевірте посилання або спробуйте іншу якість.")
             except MessageNotModified:
                 pass
 
+    except RPCError as e:
+        logging.error(f"Помилка Telegram API: {e}")
     except Exception as e:
-        logging.error(f"Помилка: {e}")
+        logging.error(f"Загальна помилка: {e}")
         try:
-            await status_msg.edit_text(f"❌ Помилка при завантаженні: {e}")
+            await status_msg.edit_text(f"❌ Виникла помилка: {e}")
         except MessageNotModified:
             pass
-
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        # Прибирання залишків файлів
+        for f in os.listdir("."):
+            if f.startswith(filename_base) and os.path.exists(f):
+                os.remove(f)
 
 
 async def main():
     await start_web_server()
     await app.start()
-    logging.info("Бот успішно запущений!")
+    logging.info("🚀 Бот повністю запущений і готовий до роботи!")
     await asyncio.Event().wait()
 
 
