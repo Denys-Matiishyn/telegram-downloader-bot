@@ -1,4 +1,11 @@
 import asyncio
+
+# 🛠 ПАТЧ ДЛЯ PYTHON 3.14+ (Має бути ДО імпорту pyrogram!)
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 import os
 import logging
 from pyrogram import Client, filters
@@ -19,7 +26,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# Використовуємо нове ім'я сесії v2, щоб уникнути конфліктів авторизації
 app = Client(
     "downloader_render_v2",
     api_id=API_ID,
@@ -141,7 +147,6 @@ async def process_quality(client: Client, callback: CallbackQuery):
     try:
         success = await download_media(url, output_template, fmt)
 
-        # Шукаємо завантажений файл
         downloaded_file = None
         for f in os.listdir("."):
             if f.startswith(filename_base):
@@ -151,8 +156,8 @@ async def process_quality(client: Client, callback: CallbackQuery):
         if success and downloaded_file and os.path.exists(downloaded_file):
             size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
 
-            if size_mb > 2000:  # Ліміт Telegram 2 ГБ
-                await status_msg.edit_text("❌ Файл занадто великий для відправки в Telegram (> 2GB).")
+            if size_mb > 2000:
+                await status_msg.edit_text("❌ Файл занадто великий (> 2GB).")
                 os.remove(downloaded_file)
                 return
 
@@ -179,7 +184,7 @@ async def process_quality(client: Client, callback: CallbackQuery):
                 os.remove(downloaded_file)
         else:
             try:
-                await status_msg.edit_text("❌ Помилка завантаження. Перевірте посилання або спробуйте іншу якість.")
+                await status_msg.edit_text("❌ Помилка завантаження.")
             except MessageNotModified:
                 pass
 
@@ -192,7 +197,6 @@ async def process_quality(client: Client, callback: CallbackQuery):
         except MessageNotModified:
             pass
     finally:
-        # Прибирання залишків файлів
         for f in os.listdir("."):
             if f.startswith(filename_base) and os.path.exists(f):
                 os.remove(f)
